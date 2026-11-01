@@ -23,6 +23,26 @@ const doc = (documentId, driveVersion = "v1") => ({ documentId, title: "test",
 const snapshotParser = (_document, sourceId) => ({ documentId: "new-doc", sourceId,
   revisionId: "r1", contentDigest: "digest", problems: [{ stableKey: `${sourceId}|Q1` }] });
 
+test('P1 provenance holds survive repeated scans without becoming retryable failures', async () => {
+  class P1Pool extends FakePool {
+    async query(sql) {
+      if(sql.includes('FROM document_folders')) return {rows:[{folderId:'approved',subjectId:'CONSTITUTION',stage:'P1',enabled:true}]};
+      return super.query(sql);
+    }
+  }
+  for(const [status,reviewReason] of [['REVIEW','FOLDER_MOVE'],['REVIEW','NOT_FOUND'],['REVIEW','UNKNOWN'],['ERROR','NOT_FOUND'],['ERROR','UNKNOWN'],['ERROR',null]]) {
+    for(const flag of ['true','false',undefined]) for(let run=0;run<2;run++) {
+      const forbidden=async()=>assert.fail('protected hold reached content or write operation');
+      const result=await syncDriveFolderDocuments({env:{...env,DOCS_P1_AUTO_PUBLISH_ENABLED:flag},Pool:P1Pool,
+        tokenProvider:async()=> 'token',listFiles:async()=>[doc('held')],
+        register:async()=>({sourceId:'held-source',status,reviewReason}),
+        fetchDocument:forbidden,publishDocsP1:forbidden,record:forbidden,recordFailure:forbidden});
+      assert.equal(result.documents[0].status,status);
+      assert.equal(result.appliedToPublishedBank,false);
+    }
+  }
+});
+
 test('held case metadata survives all-held, partial staging and duplicate review', async () => {
   for (const mode of ['all-held','partial','duplicate']) {
     const heldCases=[{caseKey:'synthetic-case',reasons:['SOURCE_INVALID_MAX_POINTS']}];
