@@ -5,7 +5,8 @@ import { readFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import pg from "pg";
 
-import { createPostgresExecutor, gradingAad } from "../db/postgres-adapter.mjs";
+import { createPostgresExecutor, gradingAad, decryptGradingPayload } from "../db/postgres-adapter.mjs";
+import { SUBJECTS } from "../subjects.mjs";
 import { createP2CriteriaManifest } from "../db/p2-fixed-criteria.mjs";
 import { p2PublicationDigest } from "../db/publish-p2-fixed-criteria.mjs";
 import { p2ScoreBasisDigest } from "../db/p2-score-basis.mjs";
@@ -27,11 +28,11 @@ const p2Keys = ["SRC-CIV-005|2025-제1회-문8-소문항1", "SRC-CIV-005|2025-�
 const migration = (name) => readFile(new URL(`../db/migrations/${name}`, import.meta.url), "utf8");
 const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
 
-function encryptedKey(stableKey, payload, keyVersion = "v1") {
+function encryptedKey(stableKey, payload, keyVersion = "v1", subjectId = "CIVIL") {
   const text = JSON.stringify(payload);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey, iv);
-  cipher.setAAD(gradingAad("CIVIL", stableKey, keyVersion, keyId));
+  cipher.setAAD(gradingAad(subjectId, stableKey, keyVersion, keyId));
   const body = Buffer.concat([cipher.update(text), cipher.final()]);
   return { encrypted: Buffer.concat([iv, cipher.getAuthTag(), body]), payloadDigest: digest(text) };
 }
@@ -326,7 +327,77 @@ try {
   await assert.rejects(strictExecute('commitCivilP2Grade', { setId: fixtureSet.setId, evaluations: [{ ...evaluations[0], key: fixtureKey }] }, fixtureContext), /development fixture is not eligible/);
   const fixtureState = await pool.query("SELECT s.state,(SELECT count(*)::int FROM p2_grades g WHERE g.submission_id=s.submission_id) AS grades,(SELECT count(*)::int FROM original_answers a WHERE a.submission_id=s.submission_id) AS originals FROM submissions s WHERE s.set_id=$1", [fixtureSet.setId]);
   assert.deepEqual(fixtureState.rows[0], { state: 'PREPARED', grades: 0, originals: 1 });
-  process.stdout.write(JSON.stringify({ ok: true, issuedDevelopmentFixtureCommitDenied: true, p1Issued: 2, p1Correct: 2,
+  // Reuse the existing toy prompts, answers, and fixed semantic decisions.
+  // Only subject identity and immutable version/key bindings vary in this local DB.
+  const subjectContext = { ownerId: 'isolated-all-subject-owner' };
+  const subjectResults = [];
+  async function cloneFixture(subjectId, sourceKey, stableKey, sourceOrder, stage) {
+    const source = (await pool.query(`SELECT v.*,k.encrypted_payload,k.payload_digest,k.key_version
+      FROM problem_versions v JOIN private_grading_keys k ON k.subject_id=v.subject_id AND k.stable_key=v.stable_key
+      WHERE v.subject_id='CIVIL' AND v.stable_key=$1 AND v.source_version='v1' AND k.key_version=$2`,
+      [sourceKey, stage === 'P2' ? 'v2-fixed' : 'v1'])).rows[0];
+    const documentId = `isolated-subject-${subjectId}`;
+    await pool.query(`INSERT INTO problems(subject_id,stable_key,stage,source_order,source_ref,source_version,
+      prompt_text,max_points,published,content_digest) VALUES($1,$2,$3,$4,'isolated','v1',$5,$6,true,$7)`,
+      [subjectId,stableKey,stage,sourceOrder,source.prompt_text,source.max_points,source.prompt_digest]);
+    const version = (await pool.query(`INSERT INTO problem_versions(subject_id,stable_key,source_document_id,
+      source_revision_id,source_version,stage,source_order,prompt_text,max_points,prompt_digest)
+      VALUES($1,$2,$3,'r1','v1',$4,$5,$6,$7,$8) RETURNING version_id`,
+      [subjectId,stableKey,documentId,stage,sourceOrder,source.prompt_text,source.max_points,source.prompt_digest])).rows[0];
+    await pool.query('UPDATE problems SET current_problem_version_id=$3 WHERE subject_id=$1 AND stable_key=$2',
+      [subjectId,stableKey,version.version_id]);
+    const payload = decryptGradingPayload(source.encrypted_payload,encryptionKey,
+      gradingAad('CIVIL',sourceKey,source.key_version,keyId),source.payload_digest);
+    if (stage === 'P2') payload.fixedCriteriaApproval = { ...payload.fixedCriteriaApproval,
+      problemVersionId: version.version_id, problemDigest: source.prompt_digest };
+    const sealed = encryptedKey(stableKey,payload,source.key_version,subjectId);
+    await pool.query(`INSERT INTO private_grading_keys(subject_id,stable_key,key_version,encrypted_payload,
+      payload_digest,encryption_key_id,verification_state,active_for_grading) VALUES($1,$2,$3,$4,$5,$6,'verified',true)`,
+      [subjectId,stableKey,source.key_version,sealed.encrypted,sealed.payloadDigest,keyId]);
+  }
+  for (const [subjectId, profile] of Object.entries(SUBJECTS)) {
+    await pool.query('INSERT INTO subjects(subject_id,name) VALUES($1,$2) ON CONFLICT(subject_id) DO NOTHING',
+      [subjectId,`Isolated ${subjectId}`]);
+    const documentId = `isolated-subject-${subjectId}`;
+    await pool.query("INSERT INTO source_documents(document_id,subject_id,title) VALUES($1,$2,'Existing local fixtures')", [documentId,subjectId]);
+    await pool.query("INSERT INTO document_revisions(document_id,revision_id,content_digest,parser_version,parsed_problem_count) VALUES($1,'r1','isolated','test-v1',4)", [documentId]);
+    const checks = { subjectId, p1: false, p2: false, crossSubjectDenied: true };
+    if (profile.stages.includes('P1')) {
+      const keys = ['SRC-LOCAL-SUBJECT|SYNTH-FLOW-1','SRC-LOCAL-SUBJECT|SYNTH-FLOW-2'];
+      for (let i=0;i<2;i++) await cloneFixture(subjectId,p1Keys[i],keys[i],100+i,'P1');
+      const issued = await strictExecute('issueP1',{ subjectId, requestId:'all-subject-p1',mode:'문제지정',count:2,specificKeys:keys },subjectContext);
+      const otherSubject = subjectId === 'CIVIL' ? 'CONSTITUTION' : 'CIVIL';
+      await assert.rejects(strictExecute('gradeP1',{subjectId:otherSubject,setId:issued.setId,answers:['O','X']},subjectContext),/set stage mismatch/);
+      const graded = await strictExecute('gradeP1',{subjectId,setId:issued.setId,answers:['O','X']},subjectContext);
+      assert.equal(graded.correct,2);
+      const stored = (await pool.query('SELECT count(*)::int AS n FROM p1_grades g JOIN submissions s ON s.submission_id=g.submission_id WHERE s.set_id=$1 AND g.subject_id=$2',[issued.setId,subjectId])).rows[0];
+      assert.equal(stored.n,2);
+      checks.p1=true;
+    }
+    if (profile.stages.includes('P2')) {
+      const keys = ['SRC-LOCAL-SUBJECT|2025-제1회-문8-소문항1','SRC-LOCAL-SUBJECT|2025-제1회-문8-소문항2'];
+      for (let i=0;i<2;i++) await cloneFixture(subjectId,p2Keys[i],keys[i],110+i,'P2');
+      const issued = await strictExecute('issueP2',{subjectId,requestId:'all-subject-p2',mode:'문제지정',specificKeys:[keys[0]]},subjectContext);
+      const otherSubject = subjectId === 'CIVIL' ? 'CRIMINAL' : 'CIVIL';
+      const submitted = [{...answers[0],key:keys[0]}];
+      await assert.rejects(strictExecute('prepareP2Grade',{subjectId:otherSubject,setId:issued.setId,answers:submitted},subjectContext),/set stage mismatch/);
+      const prepared = await strictExecute('prepareP2Grade',{subjectId,setId:issued.setId,answers:submitted},subjectContext);
+      assert.equal(prepared.rubrics.length,2);
+      const mappedEvaluations = fixedEvaluations.map((evaluation,i)=>({...evaluation,key:keys[i]}));
+      await assert.rejects(strictExecute('commitP2Grade',{subjectId:otherSubject,setId:issued.setId,evaluations:mappedEvaluations},subjectContext),/set stage mismatch/);
+      const graded = await strictExecute('commitP2Grade',{subjectId,setId:issued.setId,evaluations:mappedEvaluations},subjectContext);
+      assert.deepEqual(graded.summaries.map(item=>item.awardedPoints),[7.5,0]);
+      const stored = (await pool.query('SELECT g.awarded_points FROM p2_grades g JOIN submissions s ON s.submission_id=g.submission_id WHERE s.set_id=$1 AND g.subject_id=$2 ORDER BY g.stable_key',[issued.setId,subjectId])).rows;
+      assert.deepEqual(stored.map(row=>Number(row.awarded_points)),[7.5,0]);
+      checks.p2=true;
+    }
+    const progress = await strictExecute('getExamProgress',{subjectId,limit:100},subjectContext);
+    assert.ok(progress.totals.filter(item=>profile.stages.includes(item.stage)).every(item=>Number(item.completed)>0));
+    const originals = (await pool.query('SELECT count(*)::int AS n FROM original_answers a JOIN submissions s ON s.submission_id=a.submission_id WHERE s.owner_id=$1 AND a.subject_id=$2',[subjectContext.ownerId,subjectId])).rows[0];
+    assert.equal(originals.n,(checks.p1?2:0)+(checks.p2?1:0));
+    subjectResults.push(checks);
+  }
+  process.stdout.write(JSON.stringify({ ok: true, allSubjectRouting: subjectResults, issuedDevelopmentFixtureCommitDenied: true, p1Issued: 2, p1Correct: 2,
     p2CaseItems: 2, p2LearningScores: [15, 0], originalAnswers: 3,
     p2Grades: 2, replayed: true, ownerDenied: true, changedAnswerDenied: true,
     unsubmittedSubquestionHasNoReviewAttempt: true,

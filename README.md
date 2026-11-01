@@ -1,10 +1,12 @@
 # 법무사 공식 문제 관리 시스템
 
-범위: 민법 1차 공식 OX, 민법 2차 공식 사례의 출제·원답 제출·채점·기록, Google Docs 문제 증분 동기화. 기존 개념 학습 데이터와 이력은 DB에 보존하지만 이 서비스의 사용자 도구로 제공하지 않는다.
+범위: 승인 Google Docs 기반 과목별 공식 O/X·사례·서류작성 문제의 출제·원답 제출·채점·기록. 공통 엔진과 PostgreSQL을 재사용한다. 실제 발행·채점 가능한 범위와 앱 연결은 [실사용 안내](docs/all-subject-usage.md), 과목별 설정은 [subjects.mjs](integrations/chatgpt-mcp/subjects.mjs)를 따른다. 기존 개념 학습 데이터와 이력은 보존하며 학습 도구로 노출하지 않는다.
 
 ## 사용자 도구
 
-`issueCivilP1`, `gradeCivilP1`, `issueCivilP2`, `prepareCivilP2Grade`, `commitCivilP2Grade`만 WorkOS 인증 MCP에 등록한다. 2차 채점기준은 원답 확정 후 해당 세트 소유자에게만 조회된다. 2차 점수는 공식 모범답안 필수 의미요소 일치율에 소문항 최대 배점을 곱한 **AI 학습평가 점수**다. 7요소는 별도 진단이며 공식 채점자 점수가 아니다. 의미 판정 정확성은 형식 검사만으로 보증되지 않는다.
+`getExamProgress`, `issueP1`, `gradeP1`, `issueP2`, `prepareP2Grade`, `commitP2Grade`는 `subjectId`로 과목을 선택한다. 기존 민법 도구 6개는 호환을 유지한다. 모두 WorkOS 인증과 세트 소유권·과목 검증을 거친다. 2차 기준은 원답 확정 후 조회하며 고정 의미요소의 1·0.5·0 비례 점수를 서버가 계산한다. 결과는 **AI 학습평가 점수**다. 7요소 진단은 별도이며 공식 채점자 점수가 아니다.
+
+기여·공개 자료 원칙은 [CONTRIBUTING.md](CONTRIBUTING.md), 보안·데이터 보호는 [SECURITY.md](SECURITY.md)를 참고한다. 비공개 문제·정답·원답은 공개 저장소에 올리지 않는다.
 
 ## 관리 경로
 

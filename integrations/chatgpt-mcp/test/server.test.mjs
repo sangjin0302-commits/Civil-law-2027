@@ -6,6 +6,7 @@ test("five official exam write tools and progress read tool appear in stdio cata
   const response = await handleRequest({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   assert.deepEqual(response.result.tools.map((tool) => tool.name), [
     "getCivilExamProgress", "issueCivilP1", "gradeCivilP1", "issueCivilP2", "prepareCivilP2Grade", "commitCivilP2Grade",
+    "getExamProgress", "issueP1", "gradeP1", "issueP2", "prepareP2Grade", "commitP2Grade",
   ]);
 });
 
