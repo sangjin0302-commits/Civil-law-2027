@@ -4,20 +4,21 @@
 
 ## 지금 사용할 연결
 
-- ChatGPT 앱: **bupmu**
+- 현재 확인된 연결명: **bupmu (Codex MCP 설정)**. ChatGPT 앱 설치·연결은 확인되지 않았습니다.
 - [기존 Preview MCP 주소](https://civil-p1-mcp-test-git-integ-e09f5d-sangjin0302-commits-projects.vercel.app/mcp)
 - DB 환경: `judicial-scrivener-db-test`의 기존 독립 테스트 DB
 - 민법 저장 차단 수정: [PR #8](https://github.com/sangjin0302-commits/Judical-Scrivinier/pull/8) 병합
-- 다과목 코드: [PR #9](https://github.com/sangjin0302-commits/Judical-Scrivinier/pull/9) 병합, main `03cb313`
-- 확인된 Preview: `da8e76bb`, 배포 `dpl_Akn8Ajz7AedVS8r7phKpvwkwwpoE`, `READY`
+- 다과목 코드: [PR #9](https://github.com/sangjin0302-commits/Judical-Scrivinier/pull/9) 병합
+- Docs 사례 가져오기 수정: [PR #10](https://github.com/sangjin0302-commits/Judical-Scrivinier/pull/10) 병합, main `4474249`
+- 확인된 Preview: `c2b946d6f00b4bdf8a869b6f113bca5db81393e9`, 배포 `dpl_2fMeRZzAq6VmHS45YP8dCnnUz5qb`, `READY`
 
 이 Preview에는 `P2_GRADE_REQUIRE_FIXED_CRITERIA=true`, `P2_GRADE_COMMIT_ENABLED=true`가 적용됐으며 임시 세트 허용목록은 제거됐습니다. 승인 고정기준을 가진 민법 2차의 지속적인 학습점수 저장을 허용합니다. 인증·세트 소유권·원답 불변·중복 방지·합성 문항 차단은 유지합니다. 설정 확인과 실제 사용자 답안 채점·저장 성공은 별개입니다. 이번 활성화 과정에서 가짜 답안이나 성적은 만들지 않았습니다.
 
-다과목 코드 배포와 신규 P1 원본의 SQL 발행은 완료됐습니다. 다만 작업 중인 ChatGPT 세션의 bupmu에는 기존 민법 도구 6개만 노출됩니다. **새 다과목 도구가 ChatGPT에서 실제 호출되는지는 아직 확인하지 못했습니다.** 따라서 SQL 발행을 전 과목 ChatGPT 실사용 완료로 표시하지 않습니다.
+다과목 코드 배포와 신규 P1 원본의 SQL 발행은 완료됐습니다. 기존 작업 세션에는 bupmu의 민법 도구 6개가 노출됐지만, 이는 Codex MCP 연결입니다. 브라우저의 ChatGPT 설치 앱 목록에서는 bupmu를 찾지 못했고, 새 CLI 연결 확인도 `BUPMU_MCP_NOT_AVAILABLE`로 끝났습니다. **ChatGPT 설치·인증 연결과 새 다과목 도구 실호출은 미확인 상태입니다.** 따라서 SQL 발행을 전 과목 ChatGPT 실사용 완료로 표시하지 않습니다.
 
 ## 공부하는 순서
 
-이미 연결된 bupmu를 선택하고 과목·단계·원하는 범위를 말합니다. 예: **“민법 1차 미풀이 10문항 출제해.”** 답안을 O/X 순서대로 제출하면 서버가 저장된 정답키로 채점하고 기록합니다. **“민법 풀이 기록 보여줘.”**라고 요청하면 실제 DB 기록을 조회합니다.
+해당 클라이언트에서 MCP 연결과 도구 목록이 확인된 뒤 과목·단계·원하는 범위를 말합니다. 예: **“민법 1차 미풀이 10문항 출제해.”** 답안을 O/X 순서대로 제출하면 서버가 저장된 정답키로 채점하고 기록합니다. **“민법 풀이 기록 보여줘.”**라고 요청하면 실제 DB 기록을 조회합니다. 아래 순서는 연결 이후의 사용법이며, 현재 ChatGPT 연결 성공을 뜻하지 않습니다.
 
 2차 예: **“민법 2023년 제2문 전체 소문항을 출제해.”** 공통 사실관계와 소문항·배점을 확인한 뒤, 소문항 번호와 직접 작성한 답안을 제출합니다. 원답을 먼저 변경 없이 저장하고 해당 출제 버전의 고정기준을 조회합니다. 의미요소를 한 번 판정한 결과를 서버가 계산·저장합니다. 답안 작성 중에는 채점을 요청하기 전까지 임의 확정하지 않습니다. 제출하지 않은 소문항은 미제출로 남습니다.
 
@@ -72,7 +73,7 @@
 |---|---|
 | 기존 민법 문제 반영 | 기존 SQL 저장본으로 사용. 과거 대조에서 미승인 본문 차이 11건은 보존 |
 | 신규 Docs 수동 반영 | 승인 Docs의 명시적 O/X 정답을 암호화키로 저장해 P1 17,645문항 발행. 정답 충돌 1문항은 보류 |
-| 동기화 호출 중 P1 자동 발행 | `DOCS_P1_AUTO_PUBLISH_ENABLED=true` 설정 완료. 다음 Preview 배포에 반영해야 하며, 반영 후 실행 성공은 아직 미확인 |
+| 동기화 호출 중 P1 자동 발행 | 최신 Preview에 `DOCS_P1_AUTO_PUBLISH_ENABLED=true` 반영·조회 완료. 배포된 유지보수 경로의 실호출 성공은 아직 미확인 |
 | 일정에 따른 자동 실행 | 설정하지 않음. Docs 편집만으로 동기화 작업이 예약 실행된다고 안내하지 않음 |
 | 비민법 P2 반영 | 원문 미발행 등록 진행 중. 고정기준 등록·문항 발행은 아직 미완료 |
 
