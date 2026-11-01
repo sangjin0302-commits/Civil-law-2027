@@ -36,7 +36,7 @@ function encryptedKey(stableKey, payload, keyVersion = "v1") {
   return { encrypted: Buffer.concat([iv, cipher.getAuthTag(), body]), payloadDigest: digest(text) };
 }
 
-async function addProblem(stableKey, stage, sourceOrder, answer, maxPoints = null) {
+async function addProblem(stableKey, stage, sourceOrder, answer, maxPoints = null, documentId = 'synthetic-doc') {
   const prompt = `Synthetic ${stage} ${sourceOrder}`;
   await pool.query(`INSERT INTO problems(subject_id,stable_key,stage,source_order,source_ref,
     source_version,prompt_text,max_points,published,content_digest)
@@ -44,8 +44,8 @@ async function addProblem(stableKey, stage, sourceOrder, answer, maxPoints = nul
   [stableKey, stage, sourceOrder, prompt, maxPoints, digest(stableKey)]);
   const version = await pool.query(`INSERT INTO problem_versions(subject_id,stable_key,
     source_document_id,source_revision_id,source_version,stage,source_order,prompt_text,
-    max_points,prompt_digest) VALUES('CIVIL',$1,'synthetic-doc','r1','v1',$2,$3,$4,$5,$6)
-    RETURNING version_id`, [stableKey, stage, sourceOrder, prompt, maxPoints, digest(prompt)]);
+    max_points,prompt_digest) VALUES('CIVIL',$1,$7,'r1','v1',$2,$3,$4,$5,$6)
+    RETURNING version_id`, [stableKey, stage, sourceOrder, prompt, maxPoints, digest(prompt), documentId]);
   await pool.query(`UPDATE problems SET current_problem_version_id=$1
     WHERE subject_id='CIVIL' AND stable_key=$2`, [version.rows[0].version_id, stableKey]);
   const { encrypted, payloadDigest } = encryptedKey(stableKey, { answer,
@@ -314,7 +314,19 @@ try {
     !Object.hasOwn(r.evaluation_payload.aiScore,"officialMaximum")));
   const preserved = await execute("commitCivilP2Grade", { setId: oldSet.setId, evaluations }, oldContext);
   assert.deepEqual(preserved.summaries.map(g=>[g.maxPoints,g.awardedPoints]),[[15,15],[15,0]]);
-  process.stdout.write(JSON.stringify({ ok: true, p1Issued: 2, p1Correct: 2,
+  // A normal-looking exam number cannot legitimize an issued development Doc.
+  const fixtureDocument = '1sdWAsG7EcsO1RrV6Q0U0hHJpOu_9yD5zdKs63y9-N_g';
+  const fixtureKey = 'SRC-CIV-005|2025-제1회-문9-소문항1';
+  await pool.query("INSERT INTO source_documents(document_id,subject_id,title) VALUES($1,'CIVIL','Isolated fixture')", [fixtureDocument]);
+  await pool.query("INSERT INTO document_revisions(document_id,revision_id,content_digest,parser_version,parsed_problem_count) VALUES($1,'r1','fixture','test-v1',1)", [fixtureDocument]);
+  await addProblem(fixtureKey, 'P2', 99, 'Local fixture answer', 15, fixtureDocument);
+  const fixtureContext = { ownerId: 'isolated-fixture-owner' };
+  const fixtureSet = await execute('issueCivilP2', { requestId: 'fixture-old-set', mode: '문제지정', specificKeys: [fixtureKey] }, fixtureContext);
+  await execute('prepareCivilP2Grade', { setId: fixtureSet.setId, answers: [{ key: fixtureKey, text: 'Local test only' }] }, fixtureContext);
+  await assert.rejects(strictExecute('commitCivilP2Grade', { setId: fixtureSet.setId, evaluations: [{ ...evaluations[0], key: fixtureKey }] }, fixtureContext), /development fixture is not eligible/);
+  const fixtureState = await pool.query("SELECT s.state,(SELECT count(*)::int FROM p2_grades g WHERE g.submission_id=s.submission_id) AS grades,(SELECT count(*)::int FROM original_answers a WHERE a.submission_id=s.submission_id) AS originals FROM submissions s WHERE s.set_id=$1", [fixtureSet.setId]);
+  assert.deepEqual(fixtureState.rows[0], { state: 'PREPARED', grades: 0, originals: 1 });
+  process.stdout.write(JSON.stringify({ ok: true, issuedDevelopmentFixtureCommitDenied: true, p1Issued: 2, p1Correct: 2,
     p2CaseItems: 2, p2LearningScores: [15, 0], originalAnswers: 3,
     p2Grades: 2, replayed: true, ownerDenied: true, changedAnswerDenied: true,
     unsubmittedSubquestionHasNoReviewAttempt: true,
