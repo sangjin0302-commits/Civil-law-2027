@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("HTTP MCP registers five exam tools and no retired concept or Docs maintenance tools", async () => {
+test("HTTP MCP keeps civil tools plus subject-aware aliases and no retired tools", async () => {
   const source = await readFile(new URL("../app/mcp/route.js", import.meta.url), "utf8");
-  const names = [...source.matchAll(/server\.registerTool\(\s*"([^"]+)"/g)].map((match) => match[1]);
+  const names = [...source.matchAll(/registerExamTool\(\s*"([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(names, ["getCivilExamProgress", "issueCivilP1", "gradeCivilP1", "issueCivilP2",
     "prepareCivilP2Grade", "commitCivilP2Grade"]);
+  assert.match(source, /subjectId: z.enum\(SUBJECT_IDS\)/);
   for (const retired of ["getCivilConceptUnit", "setCivilStudyMode", "getCivilDueReviews",
     "submitCivilRecall", "recordCivilStudyActivity", "importCivilConceptQuestionTemplates",
     "verifyCivilDocsParity", "previewCivilDocsSync"]) {

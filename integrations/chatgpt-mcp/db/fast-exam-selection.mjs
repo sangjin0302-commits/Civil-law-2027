@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 const MODES = new Set(["전범위", "범위지정", "취약", "문제지정", "미풀이", "오답",
   "낮은점수", "복습대상", "원문변경"]);
-const SUBJECT = "CIVIL";
+import { requireSubject } from "../subjects.mjs";
 
 function options(input) {
   const stage = input.stage;
@@ -134,7 +134,7 @@ async function selectP1(client, { mode, keyword, questionType, count, specificKe
   const filter = mode === "범위지정"
     ? "AND (position(lower($4) in lower(p.prompt_text))>0 OR position(lower($4) in lower(coalesce(p.selection_metadata->>'scope','')))>0)"
     : historyFilter("P1", mode) ? `AND ${historyFilter("P1", mode)}` : "";
-  const params = [SUBJECT, input.ownerId, input.keyId, keyword, 0, count,
+  const params = [requireSubject(input.subjectId || "CIVIL", input.stage), input.ownerId, input.keyId, keyword, 0, count,
     specificKeys || [], ...exact, lowScoreBelow ?? 0, questionType];
   if (mode === "문제지정") {
     const result = await client.query(
@@ -234,7 +234,7 @@ async function selectP2(client, { mode, keyword, questionType, caseCount, specif
         AND ${groupKey}=g.group_key
        ${keyJoin}
       ORDER BY g.group_position,p.source_order,p.stable_key`,
-    [SUBJECT, input.ownerId, input.keyId, keyword,
+    [requireSubject(input.subjectId || "CIVIL", input.stage), input.ownerId, input.keyId, keyword,
       createHash("sha256").update(JSON.stringify([input.ownerId, input.requestId])).digest("hex"),
       caseCount, specificKeys || [], ...exact, lowScoreBelow ?? 0, questionType]);
   const groups = new Set(result.rows.map((row) => row.group_key));

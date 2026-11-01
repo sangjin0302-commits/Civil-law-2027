@@ -10,7 +10,7 @@ import { withDriveSourceHealth } from "./drive-source-health.mjs";
 import { publicP2ScoreBasis, approvedP2ScoreBasis, withP2ScoreBasis } from "./p2-score-basis.mjs";
 import { rejectDevelopmentP2Items } from "./p2-development-fixtures.mjs";
 
-const SUBJECT = "CIVIL";
+import { requireSubject, EXAM_TOOL_ALIASES } from "../subjects.mjs";
 const P2_SCORE_FIELDS = ["issue", "outline", "law", "precedent", "application", "conclusion", "expression"];
 const stableValue = (value) => {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -75,6 +75,7 @@ async function inTransaction(pool, operation) {
   }
 }
 
+function createSubjectOperations(SUBJECT) {
 async function ownedSet(client, setId, ownerId, stage) {
   const result = await client.query(
     `SELECT set_id, owner_id, subject_id, stage, state FROM issue_sets
@@ -123,7 +124,7 @@ async function issue(pool, ownerId, stage, input, configuredKeyId) {
       return { ok: true, replayed: true, setId: previous.rows[0].set_id, count: items.length,
         ...(stage === "P2" ? { caseCount: count } : {}), questions: items.map(publicProblem) };
     }
-    const selected = await selectExamCandidates(client, { stage, ownerId, requestId: input.requestId,
+    const selected = await selectExamCandidates(client, { subjectId: SUBJECT, stage, ownerId, requestId: input.requestId,
       keyId: configuredKeyId, mode: input.mode, keyword: input.keyword, count: input.count,
       caseCount: input.caseCount, specificKeys: input.specificKeys,
       questionType: input.questionType, year: input.year, session: input.session,
@@ -412,7 +413,7 @@ async function commitP2(pool, ownerId, input, encryptionKey, keyId, requireFixed
   });
 }
 
-export async function scheduleExamReviewDue(client, ownerId, stableKeys, submissionId) {
+async function scheduleExamReviewDue(client, ownerId, stableKeys, submissionId) {
   if (stableKeys.length === 0) return;
   await client.query(
     `INSERT INTO exam_review_due(owner_id,subject_id,stable_key,due_at,review_step,last_submission_id)
@@ -439,10 +440,21 @@ async function finalizeSubmission(client, ownerId, setId, submissionId, gradeDig
      VALUES($1,$2,$3,'submission',$4,$5)`, [ownerId, SUBJECT, eventType, submissionId, gradeDigest]);
 }
 
+return { issue, gradeP1, prepareP2, commitP2, scheduleExamReviewDue };
+}
+export async function scheduleExamReviewDue(client, ownerId, stableKeys, submissionId, subjectId = "CIVIL") {
+  return createSubjectOperations(requireSubject(subjectId)).scheduleExamReviewDue(client, ownerId, stableKeys, submissionId);
+}
 export function createPostgresExecutor(options = {}) {
   const pool = options.pool || createPostgresPool(options.env);
   const env = options.env || process.env;
   return async (name, payload, context = {}) => {
+    const generic = Object.hasOwn(EXAM_TOOL_ALIASES, name);
+    const SUBJECT = requireSubject(generic ? payload.subjectId : 'CIVIL');
+    name = generic ? EXAM_TOOL_ALIASES[name] : name;
+    const stage = name.includes('P1') ? 'P1' : name.includes('P2') ? 'P2' : payload.stage;
+    requireSubject(SUBJECT, stage);
+    const { issue, gradeP1, prepareP2, commitP2 } = createSubjectOperations(SUBJECT);
     const ownerId = required(context.ownerId, "authenticated owner");
     const keyId = () => required(env.GRADING_ENCRYPTION_KEY_ID, "GRADING_ENCRYPTION_KEY_ID");
     if (name === "getCivilExamProgress") {

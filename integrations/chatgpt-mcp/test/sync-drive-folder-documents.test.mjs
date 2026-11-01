@@ -136,7 +136,7 @@ test("cross-document duplicate lookup matches raw ID and exact prompt digest", a
   ] });
   assert.equal(duplicates.length, 1);
   assert.equal(duplicates[0].matchedKeys.length, 2);
-  assert.deepEqual(queries[0].args, [["Q1"], ["digest-b"]]);
+  assert.deepEqual(queries[0].args, [["Q1"], ["digest-b"], "CIVIL"]);
 });
 
 test("same prompt repeated inside new Doc is held for review", async () => {
