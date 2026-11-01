@@ -8,6 +8,7 @@ import { normalizeP2Submission } from "./p2-submission-contract.mjs";
 import { validateP2FixedCriteria, validateP2DecisionRubric, validateP2ApprovedSource } from "./p2-fixed-criteria.mjs";
 import { withDriveSourceHealth } from "./drive-source-health.mjs";
 import { publicP2ScoreBasis, approvedP2ScoreBasis, withP2ScoreBasis } from "./p2-score-basis.mjs";
+import { rejectDevelopmentP2Items } from "./p2-development-fixtures.mjs";
 
 const SUBJECT = "CIVIL";
 const P2_SCORE_FIELDS = ["issue", "outline", "law", "precedent", "application", "conclusion", "expression"];
@@ -88,6 +89,7 @@ async function ownedSet(client, setId, ownerId, stage) {
 async function setItems(client, setId) {
   const result = await client.query(
       `SELECT i.position, i.stable_key, i.problem_version_id, v.prompt_digest AS problem_prompt_digest,
+            v.source_document_id,
               i.key_version AS grading_key_version,
             i.encryption_key_id AS grading_encryption_key_id,
             COALESCE(v.prompt_text,p.prompt_text) AS prompt_text,
@@ -321,6 +323,7 @@ async function commitP2(pool, ownerId, input, encryptionKey, keyId, requireFixed
             } : {}) };
         }) };
     }
+    rejectDevelopmentP2Items(items);
     if (items.length !== evaluations.length || items.some((item) => !evaluations.find((e) => e.key === item.stable_key))) {
       throw new Error("evaluations must exactly match the issued P2 set");
     }
