@@ -22,7 +22,10 @@ export async function publishDocsP1(pool, {document,sourceId,subjectId,env=proce
   await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`source-order:${subjectId}`]);
   const registry=await client.query(`SELECT 1 FROM document_registry r JOIN document_folders f ON f.folder_id=r.folder_id
     WHERE r.document_id=$1 AND r.subject_id=$2 AND r.source_id=$3 AND r.stage='P1' AND r.registration_kind='FOLDER'
-    AND r.registration_status IN ('DISCOVERED','STAGED','READY') AND f.enabled AND f.subject_id=r.subject_id AND f.stage=r.stage`,[documentId,subjectId,sourceId]);
+    AND (r.registration_status IN ('DISCOVERED','STAGED','READY')
+      OR (r.registration_status='REVIEW' AND r.failure_code IS NULL)
+      OR (r.registration_status='ERROR' AND r.failure_code IN ('SYNC_FAILED','NO_PROBLEMS')))
+    AND f.enabled AND f.subject_id=r.subject_id AND f.stage=r.stage`,[documentId,subjectId,sourceId]);
   if(registry.rowCount!==1)throw Error('approved registered P1 source required');
   const prior=await client.query(`SELECT p.stable_key,p.prompt_text,p.content_digest,p.current_problem_version_id,p.published,
     v.source_document_id,v.source_revision_id,EXISTS(SELECT 1 FROM private_grading_keys k WHERE k.subject_id=p.subject_id AND k.stable_key=p.stable_key) AS has_key,
