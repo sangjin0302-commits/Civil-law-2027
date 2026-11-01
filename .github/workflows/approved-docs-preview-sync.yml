@@ -1,0 +1,30 @@
+name: Approved Docs Preview sync
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+permissions: {}
+concurrency:
+  group: approved-docs-preview-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Sync approved folders using the existing Preview route
+        env:
+          PREVIEW_DOCS_SYNC_TOKEN: ${{ secrets.PREVIEW_DOCS_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PREVIEW_DOCS_SYNC_TOKEN"
+          status=$(curl --silent --show-error --max-time 330 --output response.json --write-out '%{http_code}' \
+            --request POST --header "x-maintenance-token: $PREVIEW_DOCS_SYNC_TOKEN" \
+            'https://civil-p1-mcp-test-git-integ-e09f5d-sangjin0302-commits-projects.vercel.app/api/maintenance/sync-drive-folder-documents?dryRun=false')
+          HTTP_STATUS="$status" node -e '
+            const fs = require("fs");
+            const body = JSON.parse(fs.readFileSync("response.json", "utf8"));
+            const documentErrors=(body.documents||[]).filter(x=>x.status==="ERROR").length;
+            console.log(JSON.stringify({httpStatus:process.env.HTTP_STATUS,ok:body.ok,documentCount:body.documentCount,appliedToPublishedBank:body.appliedToPublishedBank,folderErrorCount:body.folderErrors?.length,documentErrorCount:documentErrors,reviewCount:(body.documents||[]).filter(x=>x.status==="REVIEW").length}));
+            if(process.env.HTTP_STATUS!=="200"||body.ok!==true||(body.folderErrors?.length||0)>0||documentErrors>0)process.exitCode=1;
+          '
