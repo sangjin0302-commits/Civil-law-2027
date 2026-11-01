@@ -143,6 +143,14 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
         const capacityWarning = characterCount >= warningChars ||
           (Number.isFinite(file.sizeBytes) && file.sizeBytes >= warningBytes);
         const snapshot = snapshotParser(document, registration.sourceId, file.stage, file.subjectId);
+        if (!snapshot.problems.length && snapshot.heldCases?.length) {
+          await withClient(pool, client => record(client, file.documentId, {
+            revisionId:snapshot.revisionId,driveVersion:file.driveVersion,counts:{heldCases:snapshot.heldCases},
+            problemCount:0,status:'REVIEW',
+          }));
+          results.push({documentId:file.documentId,sourceId:registration.sourceId,status:'REVIEW',heldCases:snapshot.heldCases});
+          continue;
+        }
         if (!snapshot.problems.length) throw new Error("NO_PROBLEMS");
         const crossDuplicates = await findDuplicates(pool, snapshot);
         if (crossDuplicates.length) {
@@ -150,12 +158,13 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
             revisionId: snapshot.revisionId, driveVersion: file.driveVersion,
             counts: { CROSS_DOCUMENT_DUPLICATE: crossDuplicates.length,
               duplicateStableKeys: crossDuplicates.map((item) => item.stableKey),
-              capacityWarning },
+              capacityWarning, heldCases: snapshot.heldCases || [] },
             problemCount: snapshot.problems.length, status: "REVIEW",
           }));
           results.push({ documentId: file.documentId, sourceId: registration.sourceId,
             status: "REVIEW", code: "CROSS_DOCUMENT_DUPLICATE",
-            duplicateCount: crossDuplicates.length });
+            duplicateCount: crossDuplicates.length,
+            ...(snapshot.heldCases?.length ? { heldCases: snapshot.heldCases } : {}) });
           continue;
         }
         const requestId = "drive-detect:" + sha256({ documentId: file.documentId,
@@ -172,9 +181,11 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
         }
         await withClient(pool, (client) => record(client, file.documentId, {
           revisionId: snapshot.revisionId, driveVersion: file.driveVersion,
-          counts: { ...counts, capacityWarning }, problemCount: snapshot.problems.length, status: "STAGED" }));
+          counts: { ...counts, capacityWarning, heldCases: snapshot.heldCases || [] }, problemCount: snapshot.problems.length,
+          status: snapshot.heldCases?.length ? "REVIEW" : "STAGED" }));
         results.push({ documentId: file.documentId, sourceId: registration.sourceId,
-          status: "STAGED", counts, stagedNew, capacityWarning,
+          status: snapshot.heldCases?.length ? "REVIEW" : "STAGED", counts, stagedNew, capacityWarning,
+          ...(snapshot.heldCases?.length ? { heldCases: snapshot.heldCases } : {}),
           ...(capacityWarning ? { guidance: "Start the next Google Doc in the same folder; do not split this source automatically." } : {}) });
       } catch (error) {
         if (registration) await withClient(pool, (client) =>
@@ -199,7 +210,7 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
       }
     }
     return { ok: folderErrors.length === 0 && results.every((item) => item.status !== "ERROR"),
-      appliedToPublishedBank: false, folderErrors, documents: results, missingReview };
+      appliedToPublishedBank: results.some(item => item.published > 0), folderErrors, documents: results, missingReview };
   } finally {
     await pool.end();
   }
