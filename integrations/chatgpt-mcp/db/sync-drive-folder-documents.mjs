@@ -114,8 +114,13 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
       let registration;
       try {
         registration = await withClient(pool, (client) => register(client, file));
+        // Preserve source/provenance holds; a rejected publication must not turn
+        // them into a retryable SYNC_FAILED on the next scheduled scan.
+        const protectedP1Hold = file.stage === 'P1' && file.subjectId !== 'CIVIL' &&
+          ((registration.status === 'REVIEW' && registration.reviewReason != null) ||
+           (registration.status === 'ERROR' && !['SYNC_FAILED', 'NO_PROBLEMS'].includes(registration.reviewReason)));
         if (registration.status === "EXTERNAL" ||
-            (registration.status === "REVIEW" && registration.reviewReason === "FOLDER_MOVE")) {
+            (registration.status === "REVIEW" && registration.reviewReason === "FOLDER_MOVE") || protectedP1Hold) {
           results.push({ documentId: file.documentId, sourceId: registration.sourceId,
             status: registration.status });
           continue;

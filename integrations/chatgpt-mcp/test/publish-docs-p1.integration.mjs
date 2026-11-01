@@ -7,7 +7,7 @@ import { publishDocsP1 } from '../db/publish-docs-p1.mjs';
 import { createPostgresExecutor, decryptGradingPayload, gradingAad } from '../db/postgres-adapter.mjs';
 
 const target = new URL(process.env.TEST_DATABASE_URL || 'http://invalid');
-if (!['127.0.0.1','localhost'].includes(target.hostname) || target.port !== '55432' ||
+if (!['127.0.0.1','localhost'].includes(target.hostname) || !['55432','55534'].includes(target.port) ||
     !/^exam_flow_docs_p1[a-z0-9_]*$/.test(target.pathname.slice(1))) {
   throw new Error('requires a disposable localhost exam_flow_docs_p1 database');
 }
@@ -53,6 +53,19 @@ try {
   assert.equal(stored.answer_text,'O');
   const replay=await publishDocsP1(pool,{document,sourceId,subjectId,env});
   assert.deepEqual(replay,{published:0,held:0,reused:1,parsed:1});
+  for(const [status,code] of [['REVIEW',null],['ERROR','SYNC_FAILED'],['ERROR','NO_PROBLEMS']]) {
+    await pool.query('UPDATE document_registry SET registration_status=$2,failure_code=$3 WHERE document_id=$1',[documentId,status,code]);
+    assert.deepEqual(await publishDocsP1(pool,{document,sourceId,subjectId,env}),replay);
+  }
+  for(const [status,code] of [['REVIEW','FOLDER_MOVE'],['REVIEW','NOT_FOUND'],['REVIEW','UNKNOWN'],['ERROR','FOLDER_MOVE'],['ERROR','NOT_FOUND'],['ERROR','UNKNOWN'],['ERROR',null]]) {
+    await pool.query('UPDATE document_registry SET registration_status=$2,failure_code=$3 WHERE document_id=$1',[documentId,status,code]);
+    await assert.rejects(publishDocsP1(pool,{document,sourceId,subjectId,env}),/approved registered P1 source required/);
+  }
+  await pool.query("UPDATE document_registry SET registration_status='REVIEW',failure_code=NULL WHERE document_id=$1",[documentId]);
+  await pool.query('UPDATE document_folders SET enabled=false WHERE folder_id=$1',[folderId]);
+  await assert.rejects(publishDocsP1(pool,{document,sourceId,subjectId,env}),/approved registered P1 source required/);
+  await pool.query('UPDATE document_folders SET enabled=true WHERE folder_id=$1',[folderId]);
+  await assert.rejects(publishDocsP1(pool,{document,sourceId:sourceId+'-wrong',subjectId,env}),/approved registered P1 source required/);
   const changed=structuredClone(document);changed.revisionId='r2';
   changed.body.content[0]=paragraph('[Q1] local | X',1);
   const held=await publishDocsP1(pool,{document:changed,sourceId,subjectId,env});
@@ -64,5 +77,6 @@ try {
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM private_grading_keys WHERE subject_id=$1',[subjectId])).rows[0].n,1);
   await assert.rejects(publishDocsP1(pool,{document:{...document,documentId:'1W9WZwSsM6OyJFo37lAnfa-at_SeM5TINNy1JTI2_2w4'},sourceId,subjectId,env}),/development source excluded/);
   console.log(JSON.stringify({ok:true,docsToEncryptedSql:true,genericIssueGradeStored:true,replayPublished:0,
-    changedAnswerHeld:true,revisionCollisionDenied:true,priorKeyAndGradePreserved:true,developmentDocDenied:true,environment:'localhost disposable'}));
+    changedAnswerHeld:true,revisionCollisionDenied:true,priorKeyAndGradePreserved:true,developmentDocDenied:true,
+    retryStatesPassed:3,protectedStatesDenied:7,disabledFolderDenied:true,wrongSourceDenied:true,environment:'localhost disposable'}));
 } finally { await pool.end(); }
