@@ -121,6 +121,9 @@ const keyJoin = `JOIN LATERAL (
 const fields = `p.stable_key,p.prompt_text,p.max_points,p.source_version,p.selection_metadata,
   p.current_problem_version_id AS problem_version_id,
   k.key_version AS grading_key_version,k.encryption_key_id AS grading_encryption_key_id`;
+// P2 issuance accepts only the bounded official-exam stable-key form. This keeps
+// seeded/synthetic sessions (for example, session 9001) out of learner issuance.
+const officialP2StableKey = `p.stable_key ~ '^[^|]+\\|[0-9]{4}-제[1-9][0-9]{0,2}회-문[1-9][0-9]{0,2}-소문항[1-9][0-9]*$'`;
 
 async function selectP1(client, { mode, keyword, questionType, count, specificKeys, exact, lowScoreBelow }, input) {
   const exactFilter = `AND ($8::text='' OR p.selection_metadata->>'year'=$8)
@@ -209,7 +212,7 @@ async function selectP2(client, { mode, keyword, questionType, caseCount, specif
     `WITH eligible_groups AS (
        SELECT ${groupKey} AS group_key
          FROM problems p
-        WHERE p.subject_id=$1 AND p.stage='P2' AND p.stable_key ~ '-소문항[0-9]+$'
+        WHERE p.subject_id=$1 AND p.stage='P2' AND ${officialP2StableKey}
           AND $2::text IS NOT NULL AND $4::text IS NOT NULL
           AND $5::text IS NOT NULL AND $7::text[] IS NOT NULL AND $11::numeric IS NOT NULL
         GROUP BY ${groupKey}

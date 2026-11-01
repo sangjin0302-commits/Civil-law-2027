@@ -132,7 +132,8 @@ test("P2 returns every item from complete verified case groups", async () => {
   } };
   const rows = await selectExamCandidates(client, { ...base, stage: "P2", caseCount: 2 });
   assert.equal(rows.length, 3);
-  assert.match(calls[0].sql, /-소문항\[0-9\]\+\$/);
+  assert.match(calls[0].sql, /제\[1-9\]\[0-9\]\{0,2\}회/);
+  assert.doesNotMatch(calls[0].sql, /제\[0-9\]\+회/);
   assert.match(calls[0].sql, /bool_and\(p.published AND p.current_problem_version_id IS NOT NULL AND NOT EXISTS/);
   assert.match(calls[0].sql, /JOIN LATERAL/);
   assert.match(calls[0].sql, /ORDER BY key_candidate.created_at DESC,key_candidate.key_version DESC LIMIT 1/);
