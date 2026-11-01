@@ -23,6 +23,28 @@ const doc = (documentId, driveVersion = "v1") => ({ documentId, title: "test",
 const snapshotParser = (_document, sourceId) => ({ documentId: "new-doc", sourceId,
   revisionId: "r1", contentDigest: "digest", problems: [{ stableKey: `${sourceId}|Q1` }] });
 
+test('held case metadata survives all-held, partial staging and duplicate review', async () => {
+  for (const mode of ['all-held','partial','duplicate']) {
+    const heldCases=[{caseKey:'synthetic-case',reasons:['SOURCE_INVALID_MAX_POINTS']}];
+    let detected=0,applied=0;const records=[];
+    const result=await syncDriveFolderDocuments({env,Pool:FakePool,tokenProvider:async()=> 'synthetic',
+      listFiles:async id=>id==='folder-2'?[doc('new-doc')]:[],
+      register:async()=>({sourceId:'synthetic-source',status:'DISCOVERED'}),
+      fetchDocument:async()=>({documentId:'new-doc'}),
+      snapshotParser:()=>({...snapshotParser({},'synthetic-source'),heldCases,
+        ...(mode==='all-held'?{problems:[]}:{})}),
+      findDuplicates:async()=>mode==='duplicate'?[{stableKey:'synthetic-source|Q1'}]:[],
+      detect:async()=>{detected++;return {counts:{NEW:1},candidates:[{candidate_kind:'NEW',state:'PENDING',candidate_id:'synthetic'}]};},
+      apply:async()=>{applied++;},record:async(_c,_id,data)=>records.push(data),
+    });
+    assert.equal(result.documents[0].status,'REVIEW');
+    assert.deepEqual(result.documents[0].heldCases,heldCases);
+    assert.deepEqual(records[0].counts.heldCases,heldCases);
+    assert.equal(detected,mode==='partial'?1:0);assert.equal(applied,mode==='partial'?1:0);
+    assert.equal(result.appliedToPublishedBank,false);
+  }
+});
+
 test("dry run lists folders with server token provider and never fetches content or writes", async () => {
   const queries = [];
   let closed = false;
