@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { requireSubject } from "../subjects.mjs";
 
 const DOC_MIME = "application/vnd.google-apps.document";
 const DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
@@ -57,14 +58,16 @@ export async function discoverFolderDocuments(folders, accessToken, fetchImpl = 
 }
 
 function sourceIdFor(subjectId) {
-  if (subjectId !== "CIVIL") throw new Error("parser not configured for subject");
-  return `SRC-CIV-AUTO-${randomUUID().replaceAll("-", "")}`;
+  requireSubject(subjectId);
+  const prefix = subjectId === "CIVIL" ? "CIV" : subjectId.replaceAll("_", "-");
+  return `SRC-${prefix}-AUTO-${randomUUID().replaceAll("-", "")}`;
 }
 
 export async function registerDiscoveredDocument(client, file) {
   const { documentId, title, folderId, subjectId, stage } = file;
   if (![documentId, folderId].every((value) => ID.test(value || ""))) throw new Error("invalid Drive id");
-  if (subjectId !== "CIVIL" || !["P1", "P2"].includes(stage)) throw new Error("unsupported source");
+  requireSubject(subjectId, stage);
+  if (!["P1", "P2"].includes(stage)) throw new Error("unsupported source");
   await client.query("BEGIN");
   try {
     const folder = await client.query(
@@ -72,10 +75,13 @@ export async function registerDiscoveredDocument(client, file) {
       [folderId, subjectId, stage]);
     if (!folder.rowCount) throw new Error("unregistered folder");
     const prior = await client.query(
-      "SELECT source_id,folder_id,registration_kind,registration_status,failure_code,last_synced_drive_version FROM document_registry WHERE document_id=$1 FOR UPDATE",
+      "SELECT source_id,folder_id,subject_id,stage,registration_kind,registration_status,failure_code,last_synced_drive_version FROM document_registry WHERE document_id=$1 FOR UPDATE",
       [documentId]);
     if (prior.rowCount) {
       const row = prior.rows[0];
+      if ((row.subject_id && row.subject_id !== subjectId) || (row.stage && row.stage !== stage)) {
+        throw new Error("registered document subject or stage mismatch");
+      }
       if (row.registration_kind === "EXTERNAL") {
         await client.query("COMMIT");
         return { sourceId: row.source_id, status: "EXTERNAL", replayed: true };
@@ -99,9 +105,12 @@ export async function registerDiscoveredDocument(client, file) {
         lastSyncedDriveVersion: row.last_synced_drive_version, replayed: true };
     }
     const sourceId = sourceIdFor(subjectId);
-    await client.query(
-      "INSERT INTO source_documents(document_id,subject_id,title,read_only) VALUES($1,$2,$3,true) ON CONFLICT(document_id) DO NOTHING",
+    const source = await client.query(
+      `INSERT INTO source_documents(document_id,subject_id,title,read_only) VALUES($1,$2,$3,true)
+       ON CONFLICT(document_id) DO UPDATE SET title=source_documents.title
+         WHERE source_documents.subject_id=EXCLUDED.subject_id RETURNING document_id`,
       [documentId, subjectId, title]);
+    if (source.rowCount !== 1) throw new Error("source document subject mismatch");
     await client.query(
       `INSERT INTO document_registry(document_id,source_id,subject_id,stage,folder_id,title,
          registration_kind,registration_status,last_seen_at)

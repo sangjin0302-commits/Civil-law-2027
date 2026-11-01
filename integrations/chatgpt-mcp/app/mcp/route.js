@@ -1,3 +1,4 @@
+import { SUBJECT_IDS, EXAM_TOOL_ALIASES } from "../../subjects.mjs";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
 
@@ -23,7 +24,15 @@ const ownerIdFromContext = (ctx) => ctx?.http?.authInfo?.extra?.userId;
 
 const baseHandler = createMcpHandler(
   (server) => {
-    server.registerTool(
+    const registerExamTool = (name, config, handler) => {
+      server.registerTool(name, config, handler);
+      const generic = Object.keys(EXAM_TOOL_ALIASES).find(key => EXAM_TOOL_ALIASES[key] === name);
+      server.registerTool(generic, { ...config, title: config.title.replace('민법', '과목별'),
+        description: 'subjectId로 과목을 선택합니다. ' + config.description,
+        inputSchema: config.inputSchema.extend({ subjectId: z.enum(SUBJECT_IDS) }) },
+        async (input, ctx) => callTool(generic, input, { ownerId: ownerIdFromContext(ctx) }));
+    };
+    registerExamTool(
       "getCivilExamProgress",
       {
         title: "민법 공식 문제 진행 현황",
@@ -42,7 +51,7 @@ const baseHandler = createMcpHandler(
       }),
     );
 
-    server.registerTool(
+    registerExamTool(
       "issueCivilP1",
       {
         title: "민법 1차 공식 문제 출제",
@@ -70,7 +79,7 @@ const baseHandler = createMcpHandler(
       }),
     );
 
-    server.registerTool(
+    registerExamTool(
       "gradeCivilP1",
       {
         title: "민법 1차 공식 답안 채점",
@@ -89,7 +98,7 @@ const baseHandler = createMcpHandler(
       }),
     );
 
-    server.registerTool(
+    registerExamTool(
       "issueCivilP2",
       { title: "민법 2차 공식 사례 출제", description: "PostgreSQL에서 사례를 선택하고 해당 사례의 모든 소문항을 함께 출제합니다.",
         inputSchema: z.object({ requestId: z.string().min(1).max(200), caseCount: z.number().int().min(1).max(20).optional(),
@@ -108,7 +117,7 @@ const baseHandler = createMcpHandler(
       }),
     );
 
-    server.registerTool(
+    registerExamTool(
       "prepareCivilP2Grade",
       { title: "민법 2차 원답 제출 및 채점기준 조회",
         description: "실제 작성한 소문항 원답을 변경 없이 확정한 뒤 공식 모범답안과 채점기준을 조회합니다. 빠진 소문항은 미제출로 구분하며 답안을 만들지 않습니다.",
@@ -120,7 +129,7 @@ const baseHandler = createMcpHandler(
       }),
     );
 
-    server.registerTool(
+    registerExamTool(
       "commitCivilP2Grade",
       { title: "민법 2차 AI 학습평가 기록 확정",
         description: "원답 확정 뒤 공식 모범답안의 중복 없는 필수 의미요소와 대조합니다. 완전 1·부분 0.5·누락/오류 0 비율에 최대 배점을 곱한 AI 학습평가 점수를 서버에서 계산합니다. 7요소는 별도 진단이며 공식 채점자 점수가 아닙니다.",

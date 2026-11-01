@@ -9,6 +9,12 @@ import { fetchGoogleDocReadOnly, detectGoogleDocsChanges, applyApprovedSyncCandi
 import { snapshotFromGoogleDoc } from "./google-docs-snapshot.mjs";
 import { documentParagraphs } from "./google-docs-parser.mjs";
 import { postgresConnectionOptions } from "./pg-connection.mjs";
+import { requireSubject, SUBJECT_IDS } from "../subjects.mjs";
+import { publishDocsP1 } from "./publish-docs-p1.mjs";
+const DEVELOPMENT_DOCUMENT_IDS = new Set([
+  "1W9WZwSsM6OyJFo37lAnfa-at_SeM5TINNy1JTI2_2w4",
+  "1sdWAsG7EcsO1RrV6Q0U0hHJpOu_9yD5zdKs63y9-N_g",
+]);
 
 function warningLimit(value, fallback) {
   const number = value == null || value === "" ? fallback : Number(value);
@@ -45,9 +51,9 @@ export async function findCrossDocumentDuplicates(pool, snapshot) {
        JOIN problem_versions v ON v.version_id=p.current_problem_version_id
        LEFT JOIN problem_source_map m ON m.subject_id=p.subject_id
         AND m.stable_key=p.stable_key AND m.active=true
-      WHERE p.subject_id='CIVIL'
+      WHERE p.subject_id=$3
         AND (substring(p.stable_key from position('|' in p.stable_key)+1)=ANY($1::text[])
-             OR v.prompt_digest=ANY($2::text[]))`, [rawIds, digests]);
+             OR v.prompt_digest=ANY($2::text[]))`, [rawIds, digests, requireSubject(snapshot.subjectId || "CIVIL")]);
   return [...withinDocument, ...crossDocumentDuplicateCandidates(snapshot.problems.map((problem) => ({
     ...problem, documentId: snapshot.documentId,
   })), current.rows)];
@@ -71,8 +77,8 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
   try {
     const folders = (await pool.query(
       `SELECT folder_id AS "folderId",subject_id AS "subjectId",stage,enabled
-         FROM document_folders WHERE enabled=true AND subject_id='CIVIL'
-         ORDER BY folder_id`)).rows;
+         FROM document_folders WHERE enabled=true AND subject_id=ANY($1::text[])
+         ORDER BY folder_id`, [SUBJECT_IDS])).rows;
     const discovered = [];
     const folderSummaries = [];
     const folderErrors = [];
@@ -96,6 +102,10 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
       (documentOccurrences.get(file.documentId) || 0) + 1);
     const results = [];
     for (const file of discovered) {
+      if (DEVELOPMENT_DOCUMENT_IDS.has(file.documentId)) {
+        results.push({ documentId: file.documentId, status: "EXCLUDED", code: "DEVELOPMENT_FIXTURE" });
+        continue;
+      }
       if (documentOccurrences.get(file.documentId) > 1) {
         if (results.some((item) => item.documentId === file.documentId)) continue;
         results.push({ documentId: file.documentId, status: "REVIEW", code: "MULTIPLE_FOLDERS" });
@@ -117,10 +127,22 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
           continue;
         }
         const document = await fetchDocument({ documentId: file.documentId, accessToken, fetchImpl });
+        // Existing civil revisions retain their reviewed synchronization path.
+        // Other approved P1 banks use only explicit source O/X keys, never model-generated answers.
+        if (file.stage === 'P1' && file.subjectId !== 'CIVIL' && env.DOCS_P1_AUTO_PUBLISH_ENABLED === 'true') {
+          const publication = await publishDocsP1(pool, {document, sourceId: registration.sourceId, subjectId: file.subjectId, env});
+          const status = publication.held ? 'REVIEW' : 'READY';
+          await withClient(pool, client => record(client, file.documentId, {
+            revisionId: document.revisionId, driveVersion: file.driveVersion, counts: publication,
+            problemCount: publication.parsed, status,
+          }));
+          results.push({documentId:file.documentId,sourceId:registration.sourceId,status,...publication});
+          continue;
+        }
         const characterCount = documentParagraphs(document).reduce((sum, item) => sum + item.text.length, 0);
         const capacityWarning = characterCount >= warningChars ||
           (Number.isFinite(file.sizeBytes) && file.sizeBytes >= warningBytes);
-        const snapshot = snapshotParser(document, registration.sourceId, file.stage);
+        const snapshot = snapshotParser(document, registration.sourceId, file.stage, file.subjectId);
         if (!snapshot.problems.length) throw new Error("NO_PROBLEMS");
         const crossDuplicates = await findDuplicates(pool, snapshot);
         if (crossDuplicates.length) {
@@ -166,7 +188,7 @@ export async function syncDriveFolderDocuments({ env = process.env, fetchImpl = 
     if (!folderErrors.length) {
       const registered = (await pool.query(
         `SELECT document_id AS "documentId",registration_kind AS "registrationKind",folder_id AS "folderId"
-           FROM document_registry WHERE subject_id='CIVIL'`)).rows;
+           FROM document_registry WHERE subject_id=ANY($1::text[])`, [SUBJECT_IDS])).rows;
       // A complete scan covers only enabled folders. Disabling a folder must not
       // turn its retained documents into missing-source review candidates.
       const scannedFolders = new Set(folders.map((folder) => folder.folderId));

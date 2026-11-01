@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { normalizedPrompt } from "./google-docs-parser.mjs";
 
-const SUBJECT = "CIVIL";
+import { requireSubject } from "../subjects.mjs";
 
 const stableValue = (value) => {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -63,6 +63,8 @@ function normalizeProblem(problem) {
 
 export function normalizeDocumentSnapshot(input) {
   const problems = (input.problems || []).map(normalizeProblem);
+  const subjectId = requireSubject(input.subjectId || "CIVIL");
+  for (const problem of problems) requireSubject(subjectId, problem.stage);
   const sourceId = input.sourceId ? required(input.sourceId, "sourceId") : null;
   if (sourceId && (/[|%_]/.test(sourceId) ||
       problems.some((problem) => !problem.stableKey.startsWith(sourceId + "|")))) {
@@ -72,6 +74,7 @@ export function normalizeDocumentSnapshot(input) {
     throw new Error("sourceOrder must be a non-negative safe integer");
   }
   return {
+    ...(subjectId !== "CIVIL" ? { subjectId } : {}),
     documentId: required(input.documentId, "documentId"),
     sourceId,
     title: required(input.title, "title"),
@@ -188,6 +191,7 @@ async function loadCandidates(client, syncRunId) {
 
 export async function detectGoogleDocsChanges(pool, input, actorId) {
   const snapshot = normalizeDocumentSnapshot(input);
+  const SUBJECT = requireSubject(snapshot.subjectId || "CIVIL");
   const requestId = required(input.requestId, "requestId");
   const actor = required(actorId, "actorId");
   const requestDigest = sha256(snapshot);
@@ -204,7 +208,8 @@ export async function detectGoogleDocsChanges(pool, input, actorId) {
     await client.query(
       `INSERT INTO source_documents(document_id,subject_id,title,read_only)
        VALUES($1,$2,$3,true)
-       ON CONFLICT(document_id) DO UPDATE SET title=EXCLUDED.title`,
+       ON CONFLICT(document_id) DO UPDATE SET title=EXCLUDED.title
+         WHERE source_documents.subject_id=EXCLUDED.subject_id`,
       [snapshot.documentId, SUBJECT, snapshot.title]);
     await client.query(
       `INSERT INTO document_revisions(document_id,revision_id,source_modified_at,content_digest,
@@ -214,8 +219,10 @@ export async function detectGoogleDocsChanges(pool, input, actorId) {
       [snapshot.documentId, snapshot.revisionId, snapshot.modifiedTime, snapshot.contentDigest,
         snapshot.parserVersion, snapshot.problems.length]);
     const revision = await client.query(
-      `SELECT content_digest FROM document_revisions WHERE document_id=$1 AND revision_id=$2`,
-      [snapshot.documentId, snapshot.revisionId]);
+      `SELECT r.content_digest FROM document_revisions r
+         JOIN source_documents d ON d.document_id=r.document_id
+        WHERE r.document_id=$1 AND r.revision_id=$2 AND d.subject_id=$3`,
+      [snapshot.documentId, snapshot.revisionId, SUBJECT]);
     if (revision.rowCount !== 1 || revision.rows[0].content_digest !== snapshot.contentDigest) {
       throw new Error("revision content digest mismatch");
     }
@@ -314,6 +321,7 @@ export async function applyApprovedSyncCandidate(pool, input) {
         WHERE c.candidate_id=$1 FOR UPDATE`, [candidateId]);
     if (candidate.rowCount !== 1) throw new Error("candidate not found");
     const row = candidate.rows[0];
+    const SUBJECT = requireSubject(row.subject_id || "CIVIL");
     if (row.state === "APPLIED") return { ok: true, replayed: true, candidateId };
     if (autoStageNew) {
       if (row.candidate_kind !== "NEW" || row.state !== "PENDING" ||
@@ -341,6 +349,7 @@ export async function applyApprovedSyncCandidate(pool, input) {
     }
     if (!autoStageNew) await requireApprovals(client, row);
     const payload = row.candidate_payload;
+    if (payload.stage) requireSubject(SUBJECT, payload.stage);
     if (row.candidate_kind === "DELETE_CANDIDATE") {
       await client.query(
         `UPDATE problem_source_map SET active=false,updated_at=now()

@@ -1,5 +1,6 @@
 import { classifyDocumentSnapshot, fetchGoogleDocReadOnly, normalizeDocumentSnapshot, sha256 } from "./google-docs-sync.mjs";
 import { normalizedPrompt, parseP1Document, parseP2Document } from "./google-docs-parser.mjs";
+import { requireSubject } from "../subjects.mjs";
 
 const SOURCES = new Map([
   ["SRC-CIV-004", parseP1Document],
@@ -9,9 +10,11 @@ const SOURCES = new Map([
 
 // Docs holds prompt text. Official answers and grading keys must arrive through a
 // separate verified maintenance path; never infer them from the question document.
-export function snapshotFromGoogleDoc(document, sourceId, stage = null) {
-  const registeredStage = /^SRC-CIV-AUTO-[a-f0-9]{32}$/.test(sourceId) ? stage : null;
-  const parser = SOURCES.get(sourceId) ||
+export function snapshotFromGoogleDoc(document, sourceId, stage = null, subjectId = "CIVIL") {
+  requireSubject(subjectId, stage);
+  const prefix = subjectId === "CIVIL" ? "CIV" : subjectId.replaceAll("_", "-");
+  const registeredStage = new RegExp(`^SRC-${prefix}-AUTO-[a-f0-9]{32}$`).test(sourceId) ? stage : null;
+  const parser = (subjectId === "CIVIL" ? SOURCES.get(sourceId) : null) ||
     (registeredStage === "P1" ? parseP1Document : registeredStage === "P2" ? parseP2Document : null);
   if (!parser) throw new Error("unapproved Google Docs source");
   const parsed = parser(document, sourceId);
@@ -34,6 +37,7 @@ export function snapshotFromGoogleDoc(document, sourceId, stage = null) {
     metadataFieldsKnown: false,
   }));
   return normalizeDocumentSnapshot({
+    subjectId,
     documentId: document.documentId,
     sourceId,
     title: document.title || sourceId,
@@ -44,9 +48,9 @@ export function snapshotFromGoogleDoc(document, sourceId, stage = null) {
   });
 }
 
-export async function fetchGoogleDocsSnapshotReadOnly({ documentId, sourceId, stage = null, accessToken, fetchImpl }) {
+export async function fetchGoogleDocsSnapshotReadOnly({ documentId, sourceId, stage = null, subjectId = "CIVIL", accessToken, fetchImpl }) {
   const document = await fetchGoogleDocReadOnly({ documentId, accessToken, fetchImpl });
-  return snapshotFromGoogleDoc(document, sourceId, stage);
+  return snapshotFromGoogleDoc(document, sourceId, stage, subjectId);
 }
 
 // Diagnostic only. Existing baseline rows often have a Sheets sourceVersion and

@@ -70,7 +70,54 @@ export function parseP1Document(document, sourceId) {
       sourceOrder: problems.length,
     });
   }
+  for (const record of separateP1Records(paragraphs, sourceId)) {
+    if (!record.promptText) continue;
+    problems.push({ stableKey: record.stableKey, sourceLocator: record.sourceLocator,
+      promptText: record.promptText, promptDigest: digestText(record.promptText),
+      stage: 'P1', maxPoints: null, sourceOrder: problems.length });
+  }
   return { ...dedupe(problems), occurrenceCount: problems.length };
+}
+
+// Observed older bank format: 문항, metadata, 〔topic〕statement, answer/explanation.
+// Only explicit O/X answers qualify; multiple-choice answers are not converted.
+function separateP1Records(paragraphs, sourceId) {
+  const records = [];
+  for (let i = 0; i < paragraphs.length; i++) {
+    const id = paragraphs[i].text.match(/^문항\s+([가-힣A-Za-z][가-힣A-Za-z0-9_-]*)$/);
+    if (!id) continue;
+    let end = i + 1;
+    while (end < paragraphs.length && !/^문항\s+/.test(paragraphs[end].text)) end++;
+    const block = paragraphs.slice(i + 1, end).map(p => p.text);
+    const answers = block.map(t => t.match(/^정답\s*:\s*([OX])\s*$/)?.[1]).filter(Boolean);
+    const start = block.findIndex(t => /^〔/.test(t));
+    const stop = block.findIndex((t, j) => j > start && /^(?:정답\s*:|해설(?:\s|$|:)|정정 해설(?:\s|$|:))/.test(t));
+    if (answers.length !== 1 || start < 0 || stop < 0) continue;
+    records.push({ stableKey: sourceId + '|' + id[1], answer: answers[0],
+      sourceLocator: paragraphs[i].tabId + ':' + paragraphs[i].startIndex,
+      promptText: block.slice(start, stop).join('\n') });
+    i = end - 1;
+  }
+  return records;
+}
+
+export function parseP1GradingKeys(document, sourceId) {
+  const paragraphs = documentParagraphs(document), records = [];
+  for (const paragraph of paragraphs) {
+    const match = paragraph.text.match(/^\[([^\]]+)\]\s*.*?\s*\|\s*([OX])(?:\s+지문:\s*[\s\S]+)?\s*$/);
+    if (match) records.push({ stableKey: sourceId + '|' + match[1].trim(), answer: match[2] });
+  }
+  records.push(...separateP1Records(paragraphs, sourceId).map(({stableKey,answer}) => ({stableKey,answer})));
+  const byKey = new Map(), conflictingKeys = new Set();
+  let duplicateOccurrences = 0;
+  for (const r of records) {
+    if (byKey.has(r.stableKey)) {
+      duplicateOccurrences++;
+      if (byKey.get(r.stableKey).answer !== r.answer) conflictingKeys.add(r.stableKey);
+    } else byKey.set(r.stableKey, r);
+  }
+  return { keys: [...byKey.values()].filter(r => !conflictingKeys.has(r.stableKey)),
+    conflictingKeys: [...conflictingKeys], duplicateOccurrences, occurrenceCount: records.length };
 }
 
 export function normalizedPrompt(value) {
@@ -98,7 +145,11 @@ export function parseP2Document(document, sourceId) {
   let blockStart = -1;
   let activeBlock = null;
   let answerOrdinal = 0;
-  const answerPattern = /^현실답안\s*[1-9]\d?(?:[-\s].*?)?(\d+(?:\.\d+)?)점(?:의\s*(\d+)\/(\d+))?/;
+  const numberedAnswerPattern = /^현실답안\s*[1-9]\d?(?:[-\s].*?)?(\d+(?:\.\d+)?)점(?:의\s*(\d+)\/(\d+))?/;
+  // Drafting sources use one unnumbered target per case. Do not reinterpret
+  // mixed numbered banks: doing so would shift their established ordinals.
+  const answerPattern = paragraphs.some(p => numberedAnswerPattern.test(p.text))
+    ? numberedAnswerPattern : /^현실답안\s*\((\d+(?:\.\d+)?)점\)$/;
   function pushTarget(heading, paragraph) {
     const match = heading.match(answerPattern);
     if (!match || !activeBlock) return;

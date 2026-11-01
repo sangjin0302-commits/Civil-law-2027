@@ -1,3 +1,4 @@
+import { SUBJECT_IDS, requireSubject, EXAM_TOOL_ALIASES } from "./subjects.mjs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import readline from "node:readline";
@@ -98,6 +99,13 @@ const TOOLS = [
   }
 ];
 
+const GENERIC_TOOLS = TOOLS.map(tool => ({ ...tool,
+  name: Object.keys(EXAM_TOOL_ALIASES).find(name => EXAM_TOOL_ALIASES[name] === tool.name),
+  title: tool.title.replace('민법', '과목별'),
+  description: 'subjectId로 과목을 선택합니다. ' + tool.description,
+  inputSchema: { ...tool.inputSchema, required: ['subjectId', ...(tool.inputSchema.required || [])],
+    properties: { subjectId: { type: 'string', enum: SUBJECT_IDS }, ...tool.inputSchema.properties } },
+}));
 function issueFilters(input) {
   const result = {};
   if (input.questionType !== undefined) {
@@ -128,6 +136,12 @@ function issueFilters(input) {
 
 export function validateToolInput(name, input = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("입력은 객체여야 합니다.");
+  if (Object.hasOwn(EXAM_TOOL_ALIASES, name)) {
+    const { subjectId, ...rest } = input;
+    const canonicalName = EXAM_TOOL_ALIASES[name];
+    requireSubject(subjectId, canonicalName.includes('P1') ? 'P1' : canonicalName.includes('P2') ? 'P2' : rest.stage);
+    return { ...validateToolInput(canonicalName, rest), subjectId };
+  }
   if (name === "getCivilExamProgress") {
     const unknown = Object.keys(input).filter((key) => !["stage", "cursor", "limit"].includes(key));
     if (unknown.length) throw new Error(`허용되지 않은 입력: ${unknown.join(", ")}`);
@@ -261,7 +275,7 @@ export async function handleRequest(message, executor = executeConfigured) {
     };
   }
   if (message?.method === "tools/list") {
-    return { jsonrpc: "2.0", id: message.id, result: { tools: TOOLS } };
+    return { jsonrpc: "2.0", id: message.id, result: { tools: [...TOOLS, ...GENERIC_TOOLS] } };
   }
   if (message?.method === "tools/call") {
     try {
